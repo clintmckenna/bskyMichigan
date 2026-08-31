@@ -9,7 +9,14 @@ from fastapi.templating import Jinja2Templates
 from collector.db import get_dashboard_metrics, get_db_connection, init_db
 from collector.utils import load_config
 
-app = FastAPI(title="Bluesky Political Network Panel Monitor")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db(DB_PATH)
+    yield
+
+app = FastAPI(title="Bluesky Political Network Panel Monitor", lifespan=lifespan)
 
 # Templates directory
 BASE_DIR = Path(__file__).parent
@@ -24,14 +31,9 @@ except Exception:
 DB_PATH = os.environ.get("DB_PATH", CONFIG.get("storage", {}).get("db_path", "/data/bluesky_panel.sqlite"))
 
 
-@app.on_event("startup")
-def startup_event():
-    """Ensure database exists on startup."""
-    init_db(DB_PATH)
-
-
 def fetch_stats() -> Dict[str, Any]:
-    """Fetch current dashboard statistics from SQLite in read-only mode."""
+    """Fetch current dashboard statistics from SQLite."""
+    init_db(DB_PATH)
     conn = get_db_connection(DB_PATH, read_only=False)
     try:
         metrics = get_dashboard_metrics(conn)
@@ -46,9 +48,9 @@ def dashboard_view(request: Request):
     stats = fetch_stats()
     auto_refresh = CONFIG.get("monitor", {}).get("auto_refresh_seconds", 60)
     return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
+        request=request,
+        name="index.html",
+        context={
             "stats": stats,
             "auto_refresh_seconds": auto_refresh,
             "db_path": DB_PATH,
