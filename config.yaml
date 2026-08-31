@@ -34,14 +34,10 @@ seeder:
     - "#MichiganPolitics"
     - "MIGOP"
     - "Michigan GOP"
-    - "Pete Hoekstra"
-    - "Tudor Dixon"
-    - "John James"
     - "Mackinac Center"
     - "Michigan Dems"
     - "MIDems"
     - "Bridge Michigan"
-    - "Slotkin"
 
   # How many days back to search
   since_days: 30
