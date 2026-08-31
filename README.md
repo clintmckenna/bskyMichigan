@@ -32,7 +32,7 @@ A containerized Python collection pipeline designed for social science and netwo
                        ▼
         ┌─────────────────────────────┐
         │     Monitor UI Dashboard    │
-        │     (http://server:8123)    │
+        │     (http://server:8133)    │
         └─────────────────────────────┘
 ```
 
@@ -42,7 +42,7 @@ The pipeline operates across five coordinated services sharing a resilient SQLit
 2. **Firehose Listener (`collector/firehose_listener.py`)**: Long-running subscriber to the AT Protocol firehose (`com.atproto.sync.subscribeRepos`) filtering follow and unfollow events for tracked accounts with cursor persistence and exponential reconnection backoff.
 3. **Daily Snapshot Service (`collector/snapshot.py`)**: Scheduled daily pull of full follow lists via `app.bsky.graph.getFollows` serving as ground truth and backstopping any firehose network drops.
 4. **Post Collector (`collector/post_collector.py`)**: Incremental pull of authored posts, replies, and reposts from tracked accounts.
-5. **Monitor Dashboard (`monitor/app.py`)**: Fast, read-only web dashboard on port `8123` displaying panel composition, follow/unfollow dynamics charts, service heartbeats, and recent unfollow events.
+5. **Monitor Dashboard (`monitor/app.py`)**: Fast, read-only web dashboard on port `8133` displaying panel composition, follow/unfollow dynamics charts, service heartbeats, and recent unfollow events.
 
 ---
 
@@ -111,7 +111,7 @@ docker compose up -d
 ### 4. Access the Monitor Dashboard
 Open your browser to:
 ```
-http://<your-server-ip>:8123
+http://<your-server-ip>:8133
 ```
 The dashboard will auto-refresh every 60 seconds, displaying:
 - Total tracked accounts broken down by tier (`poster`, `replier`, `reposter`) and likely bots.

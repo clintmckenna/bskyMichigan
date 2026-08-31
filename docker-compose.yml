@@ -61,15 +61,15 @@ services:
       - CONFIG_PATH=/app/config.yaml
     restart: unless-stopped
 
-  # 5. Monitor UI Dashboard (Read-only monitoring web interface on port 8123)
+  # 5. Monitor UI Dashboard (Read-only monitoring web interface on port 8133)
   monitor-ui:
     build:
       context: .
       dockerfile: monitor/Dockerfile
     container_name: bsky_monitor_ui
-    command: ["uvicorn", "monitor.app:app", "--host", "0.0.0.0", "--port", "8123"]
+    command: ["uvicorn", "monitor.app:app", "--host", "0.0.0.0", "--port", "8133"]
     ports:
-      - "${MONITOR_PORT:-8123}:8123"
+      - "${MONITOR_PORT:-8133}:8133"
     volumes:
       - ./data:/data
       - ./config.yaml:/app/config.yaml:ro

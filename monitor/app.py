@@ -71,6 +71,6 @@ def health_check():
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(CONFIG.get("monitor", {}).get("port", 8123))
+    port = int(CONFIG.get("monitor", {}).get("port", 8133))
     host = CONFIG.get("monitor", {}).get("host", "0.0.0.0")
     uvicorn.run("monitor.app:app", host=host, port=port, reload=False)

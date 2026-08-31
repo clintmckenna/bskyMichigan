@@ -18,6 +18,6 @@ COPY collector /app/collector
 COPY monitor /app/monitor
 COPY config.yaml /app/config.yaml
 
-EXPOSE 8123
+EXPOSE 8133
 
-CMD ["uvicorn", "monitor.app:app", "--host", "0.0.0.0", "--port", "8123"]
+CMD ["uvicorn", "monitor.app:app", "--host", "0.0.0.0", "--port", "8133"]
