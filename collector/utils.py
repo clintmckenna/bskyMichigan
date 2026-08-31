@@ -124,11 +124,11 @@ def is_likely_bot(profile: Dict[str, Any], bot_config: Optional[Dict[str, Any]] 
 
 
 class ResilientAppViewClient:
-    """Resilient HTTP client for public.api.bsky.app with 429 rate limit backoff."""
+    """Resilient HTTP client for api.bsky.app with 429 rate limit backoff."""
 
     def __init__(
         self,
-        base_url: str = "https://public.api.bsky.app",
+        base_url: str = "https://api.bsky.app",
         request_delay_seconds: float = 0.15,
         max_retries: int = 5,
         base_backoff: float = 2.0,

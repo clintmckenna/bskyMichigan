@@ -54,7 +54,7 @@ firehose:
 # Daily Follows Snapshot Configuration
 snapshot:
   # AppView public API endpoint (no authentication required for public reads)
-  api_base_url: "https://public.api.bsky.app"
+  api_base_url: "https://api.bsky.app"
   # Scheduled run time in 24h format (UTC or local container time)
   schedule_time_utc: "03:00"
   # Standalone interval in seconds if running with interval scheduler
@@ -69,7 +69,7 @@ snapshot:
 
 # Post Collector Configuration
 post_collector:
-  api_base_url: "https://public.api.bsky.app"
+  api_base_url: "https://api.bsky.app"
   # Scheduled run time (UTC)
   schedule_time_utc: "04:00"
   run_interval_hours: 24

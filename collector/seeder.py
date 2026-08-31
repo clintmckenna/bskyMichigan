@@ -58,12 +58,12 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
     bot_cfg = seeder_cfg.get("bot_heuristics", {})
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=since_days)
-    cutoff_iso = cutoff_date.isoformat()
+    cutoff_iso = cutoff_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     logger.info(f"Starting seeder with {len(queries)} query terms (lookback: {since_days} days).")
 
     client = ResilientAppViewClient(
-        base_url=config.get("snapshot", {}).get("api_base_url", "https://public.api.bsky.app"),
+        base_url=config.get("snapshot", {}).get("api_base_url", "https://api.bsky.app"),
         request_delay_seconds=0.2,
         logger=logger,
     )
