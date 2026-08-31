@@ -16,7 +16,7 @@ seeder:
     - "bridgemi.com"
     - "freep.com"
     - "detroitnews.com"
-    - "michiganpublic.org"
+    - "michiganpublic.bsky.social"
   
   # How many recent posts from each seed account to crawl for repliers and reposters
   seed_account_post_crawl_limit: 30

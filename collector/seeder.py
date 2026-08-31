@@ -211,18 +211,18 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
             logger.info("=== Phase 2: Keyword Search Across Michigan Political Discourse ===")
             for query in queries:
                 logger.info(f"Searching posts for query: '{query}'...")
-                cursor = None
+                until_timestamp = None
                 posts_for_query = []
                 nodes_for_query: List[Dict[str, Any]] = []
 
                 while len(posts_for_query) < max_posts:
                     params: Dict[str, Any] = {
                         "q": query,
-                        "limit": min(50, max_posts - len(posts_for_query)),
+                        "limit": min(100, max_posts - len(posts_for_query)),
                         "since": cutoff_iso,
                     }
-                    if cursor:
-                        params["cursor"] = cursor
+                    if until_timestamp:
+                        params["until"] = until_timestamp
 
                     try:
                         data = client.get("/xrpc/app.bsky.feed.searchPosts", params=params)
@@ -235,9 +235,13 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
                         break
 
                     posts_for_query.extend(posts)
-                    cursor = data.get("cursor")
-                    if not cursor:
+
+                    # Update until timestamp to paginate backwards using the oldest post timestamp
+                    oldest_post = posts[-1]
+                    oldest_ts = oldest_post.get("record", {}).get("createdAt") or oldest_post.get("indexedAt")
+                    if not oldest_ts or oldest_ts == until_timestamp or len(posts) < 10:
                         break
+                    until_timestamp = oldest_ts
 
                 logger.info(f"Found {len(posts_for_query)} posts for query '{query}'.")
                 all_raw_results["queries"][query] = posts_for_query
