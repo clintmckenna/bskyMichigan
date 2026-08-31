@@ -11,19 +11,11 @@ storage:
 
 # Seeder Configuration
 seeder:
-  # 1. Key candidate accounts, Michigan news hubs, and political institutions
-  seed_accounts:
-    # Candidates & campaigns
-    - "abdulelsayed.bsky.social"
-    - "abdulelsayedvols.bsky.social"
-    # Michigan News Hubs & Political Press (non-partisan bridge networks)
-    - "bridgemi.com"
-    - "freep.com"
-    - "detroitnews.com"
-    - "michiganpublic.org"
-    # State political organizations & think tanks
-    - "michigandems.bsky.social"
-    - "migop.bsky.social"
+  # Michigan news hubs, and political institutions
+  - "bridgemi.com"
+  - "freep.com"
+  - "detroitnews.com"
+  - "michiganpublic.org"
   
   # How many recent posts from each seed account to crawl for repliers and reposters
   seed_account_post_crawl_limit: 30
