@@ -342,11 +342,23 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
                     if until_timestamp:
                         params["until"] = until_timestamp
 
-                    try:
-                        data = client.get("/xrpc/app.bsky.feed.searchPosts", params=params)
-                    except Exception as e:
-                        logger.warning(f"Rate limit / error on query '{query}' ({e}). Waiting 5s before continuing...")
-                        time.sleep(5.0)
+                    data = None
+                    for attempt in range(1, 4):
+                        try:
+                            data = client.get("/xrpc/app.bsky.feed.searchPosts", params=params)
+                            break
+                        except Exception as e:
+                            if attempt < 3:
+                                sleep_sec = attempt * 6.0
+                                logger.warning(
+                                    f"Rate limit / 403 on query '{query}' (attempt {attempt}/3). Backing off for {sleep_sec:.1f}s..."
+                                )
+                                time.sleep(sleep_sec)
+                            else:
+                                logger.error(f"Failed to query searchPosts for '{query}' after 3 attempts: {e}")
+                                break
+
+                    if not data:
                         break
 
                     posts = data.get("posts", [])
