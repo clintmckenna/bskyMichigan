@@ -84,7 +84,12 @@
           <span class="text-3xl font-extrabold text-white">{{ stats.accounts.total_accounts or 0 }}</span>
           <span class="text-xs text-slate-400">accounts</span>
         </div>
-        <div class="mt-3 flex items-center gap-2 text-xs flex-wrap">
+        <div class="mt-3 flex items-center gap-1.5 text-xs flex-wrap">
+          {% if stats.accounts.candidate_followers %}
+          <span class="px-2 py-0.5 rounded bg-blue-950/90 text-blue-400 border border-blue-800 font-medium">
+            {{ stats.accounts.candidate_followers }} Candidate Followers
+          </span>
+          {% endif %}
           <span class="px-2 py-0.5 rounded bg-sky-950/80 text-sky-400 border border-sky-900">
             {{ stats.accounts.posters or 0 }} Posters
           </span>

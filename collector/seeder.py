@@ -14,7 +14,9 @@ from collector.utils import (
 )
 
 
-def extract_thread_repliers(thread_node: Dict[str, Any], repliers: List[Dict[str, Any]], query_str: str) -> None:
+def extract_thread_repliers(
+    thread_node: Dict[str, Any], repliers: List[Dict[str, Any]], query_str: str, entry_method: str = "keyword_search"
+) -> None:
     """Recursively extract all repliers from a getPostThread response."""
     if not isinstance(thread_node, dict):
         return
@@ -28,6 +30,7 @@ def extract_thread_repliers(thread_node: Dict[str, Any], repliers: List[Dict[str
                     "did": author["did"],
                     "handle": author.get("handle"),
                     "tier": "replier",
+                    "entry_method": entry_method,
                     "source_query_or_post": query_str,
                     "metadata": {
                         "displayName": author.get("displayName"),
@@ -41,7 +44,92 @@ def extract_thread_repliers(thread_node: Dict[str, Any], repliers: List[Dict[str
     replies = thread_node.get("replies", [])
     if isinstance(replies, list):
         for reply in replies:
-            extract_thread_repliers(reply, repliers, query_str)
+            extract_thread_repliers(reply, repliers, query_str, entry_method)
+
+
+def crawl_candidate_followers(
+    client: ResilientAppViewClient,
+    handle: str,
+    max_followers: Optional[int],
+    bot_cfg: Dict[str, Any],
+    conn: Any,
+    logger: logging.Logger,
+) -> int:
+    """
+    Ingest followers of a candidate account, tagging each with entry_method='candidate_follower'.
+    Upserts in high-performance batches.
+    """
+    logger.info(f"Ingesting followers for candidate account @{handle} (target: {max_followers or 'ALL'})...")
+    cursor: Optional[str] = None
+    total_upserted = 0
+    batch: List[Dict[str, Any]] = []
+    page_count = 0
+
+    while True:
+        params: Dict[str, Any] = {
+            "actor": handle,
+            "limit": 100,
+        }
+        if cursor:
+            params["cursor"] = cursor
+
+        try:
+            data = client.get("/xrpc/app.bsky.graph.getFollowers", params=params)
+        except Exception as e:
+            logger.error(f"Error fetching followers for @{handle}: {e}")
+            break
+
+        followers = data.get("followers", [])
+        if not followers:
+            break
+
+        page_count += 1
+        for f in followers:
+            f_did = f.get("did")
+            if not f_did:
+                continue
+
+            batch.append(
+                {
+                    "did": f_did,
+                    "handle": f.get("handle"),
+                    "tier": "follower",
+                    "entry_method": "candidate_follower",
+                    "source_query_or_post": f"follower_of:{handle}",
+                    "likely_bot": is_likely_bot(f, bot_cfg),
+                    "metadata": {
+                        "displayName": f.get("displayName"),
+                        "description": f.get("description"),
+                        "avatar": f.get("avatar"),
+                    },
+                }
+            )
+
+            if max_followers and (total_upserted + len(batch)) >= max_followers:
+                break
+
+        # Batch upsert every 1,000 accounts
+        if len(batch) >= 1000 or (max_followers and (total_upserted + len(batch)) >= max_followers):
+            upserted = bulk_upsert_accounts(conn, batch)
+            total_upserted += upserted
+            logger.info(f"[{handle} followers] Progress: {total_upserted} accounts saved...")
+            batch = []
+
+        if max_followers and total_upserted >= max_followers:
+            break
+
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+
+    # Flush remaining batch
+    if batch:
+        upserted = bulk_upsert_accounts(conn, batch)
+        total_upserted += upserted
+
+    log_seed_query(conn, f"follower_of:{handle}", total_upserted, total_upserted)
+    logger.info(f"Finished follower ingestion for @{handle}: {total_upserted} total accounts upserted.")
+    return total_upserted
 
 
 def crawl_seed_account_interactions(
@@ -73,6 +161,7 @@ def crawl_seed_account_interactions(
                 "did": seed_did,
                 "handle": profile.get("handle", handle),
                 "tier": "poster",
+                "entry_method": "press_hub",
                 "source_query_or_post": f"seed_account:{handle}",
                 "likely_bot": False,
                 "metadata": {
@@ -94,7 +183,6 @@ def crawl_seed_account_interactions(
         for item in feed:
             post = item.get("post", {})
             post_author = post.get("author", {})
-            # Only process posts authored directly by this account
             if post_author.get("did") != seed_did:
                 continue
 
@@ -111,10 +199,12 @@ def crawl_seed_account_interactions(
                     )
                     repliers_list: List[Dict[str, Any]] = []
                     extract_thread_repliers(
-                        thread_data.get("thread", {}), repliers_list, f"reply_to_seed:{handle}"
+                        thread_data.get("thread", {}),
+                        repliers_list,
+                        f"reply_to_seed:{handle}",
+                        entry_method="press_hub",
                     )
                     for r in repliers_list:
-                        # Exclude self-replies from replier tier classification if already seed
                         if r["did"] != seed_did:
                             r["likely_bot"] = is_likely_bot(r["metadata"], bot_cfg)
                             discovered_nodes.append(r)
@@ -136,6 +226,7 @@ def crawl_seed_account_interactions(
                                     "did": reposter_did,
                                     "handle": reposter.get("handle"),
                                     "tier": "reposter",
+                                    "entry_method": "press_hub",
                                     "source_query_or_post": f"repost_of_seed:{handle}",
                                     "likely_bot": is_likely_bot(reposter, bot_cfg),
                                     "metadata": {
@@ -160,6 +251,7 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
     init_db(db_path)
 
     seeder_cfg = config.get("seeder", {})
+    candidate_seeds = seeder_cfg.get("candidate_follower_seeds", [])
     seed_accounts = seeder_cfg.get("seed_accounts", [])
     crawl_limit = seeder_cfg.get("seed_account_post_crawl_limit", 30)
     queries = seeder_cfg.get("queries", [])
@@ -172,13 +264,9 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=since_days)
     cutoff_iso = cutoff_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    logger.info(
-        f"Starting seeder with {len(seed_accounts)} seed hubs and {len(queries)} query terms."
-    )
-
     client = ResilientAppViewClient(
         base_url=config.get("snapshot", {}).get("api_base_url", "https://api.bsky.app"),
-        request_delay_seconds=0.15,
+        request_delay_seconds=0.10,
         logger=logger,
     )
 
@@ -186,9 +274,25 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
     conn = get_db_connection(db_path)
 
     try:
-        # Phase 1: Crawl key candidate accounts & Michigan news hubs
+        # Phase 1: Candidate Follower Ingestion
+        if candidate_seeds:
+            logger.info("=== Phase 1: Ingesting Candidate Followers (entry_method='candidate_follower') ===")
+            for item in candidate_seeds:
+                handle = item.get("handle") if isinstance(item, dict) else item
+                max_f = item.get("max_followers") if isinstance(item, dict) else None
+                if handle:
+                    crawl_candidate_followers(
+                        client=client,
+                        handle=handle,
+                        max_followers=max_f,
+                        bot_cfg=bot_cfg,
+                        conn=conn,
+                        logger=logger,
+                    )
+
+        # Phase 2: Crawl key news hubs & civic accounts
         if seed_accounts:
-            logger.info("=== Phase 1: Crawling Key Seed Accounts & News Hubs ===")
+            logger.info("=== Phase 2: Crawling Key Press Hubs & Civic Accounts (entry_method='press_hub') ===")
             for handle in seed_accounts:
                 logger.info(f"Targeting seed account: @{handle}...")
                 nodes, raw_posts = crawl_seed_account_interactions(
@@ -206,9 +310,9 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
                     logger.info(f"Upserted {upserted} accounts from @{handle} interactions.")
                 all_raw_results["seed_accounts"][handle] = raw_posts
 
-        # Phase 2: Keyword search across political discourse
+        # Phase 3: Keyword search across political discourse
         if queries:
-            logger.info("=== Phase 2: Keyword Search Across Michigan Political Discourse ===")
+            logger.info("=== Phase 3: Keyword Search Across Michigan Political Discourse (entry_method='keyword_search') ===")
             for query in queries:
                 logger.info(f"Searching posts for query: '{query}'...")
                 until_timestamp = None
@@ -236,7 +340,6 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
 
                     posts_for_query.extend(posts)
 
-                    # Update until timestamp to paginate backwards using the oldest post timestamp
                     oldest_post = posts[-1]
                     oldest_ts = oldest_post.get("record", {}).get("createdAt") or oldest_post.get("indexedAt")
                     if not oldest_ts or oldest_ts == until_timestamp or len(posts) < 10:
@@ -258,6 +361,7 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
                             "did": author_did,
                             "handle": author.get("handle"),
                             "tier": "poster",
+                            "entry_method": "keyword_search",
                             "source_query_or_post": f"query:{query} | post:{post.get('uri')}",
                             "likely_bot": is_likely_bot(author, bot_cfg),
                             "metadata": {
@@ -279,7 +383,10 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
                             )
                             repliers_list: List[Dict[str, Any]] = []
                             extract_thread_repliers(
-                                thread_data.get("thread", {}), repliers_list, f"reply_to:{post_uri}"
+                                thread_data.get("thread", {}),
+                                repliers_list,
+                                f"reply_to:{post_uri}",
+                                entry_method="keyword_search",
                             )
                             for r in repliers_list:
                                 r["likely_bot"] = is_likely_bot(r["metadata"], bot_cfg)
@@ -301,6 +408,7 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
                                             "did": reposter["did"],
                                             "handle": reposter.get("handle"),
                                             "tier": "reposter",
+                                            "entry_method": "keyword_search",
                                             "source_query_or_post": f"repost_of:{post_uri}",
                                             "likely_bot": is_likely_bot(reposter, bot_cfg),
                                             "metadata": {

@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import logging
 import time
@@ -6,9 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
 from collector.db import (
     diff_snapshot_dates,
@@ -20,37 +21,71 @@ from collector.db import (
     record_heartbeat,
 )
 from collector.utils import (
-    ResilientAppViewClient,
     archive_raw_json,
     load_config,
     setup_logger,
 )
 
 
-def fetch_account_follows(
-    client: ResilientAppViewClient,
+async def fetch_account_follows_async(
+    client: httpx.AsyncClient,
     account_did: str,
+    semaphore: asyncio.Semaphore,
+    delay_seconds: float = 0.05,
     page_size: int = 100,
+    max_retries: int = 5,
     logger: Optional[logging.Logger] = None,
-) -> Tuple[List[str], List[Dict[str, Any]]]:
+) -> Tuple[str, List[str], List[Dict[str, Any]], Optional[str]]:
     """
-    Fetch all accounts that `account_did` follows via app.bsky.graph.getFollows.
-    Returns a list of followed DIDs and list of raw pages.
+    Asynchronously fetch all followed accounts for `account_did`.
+    Returns (account_did, list_of_followed_dids, raw_pages, error_message).
     """
     followed_dids: List[str] = []
     raw_pages: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
+    error_msg: Optional[str] = None
 
-    while True:
-        params: Dict[str, Any] = {
-            "actor": account_did,
-            "limit": min(100, page_size),
-        }
-        if cursor:
-            params["cursor"] = cursor
+    async with semaphore:
+        while True:
+            await asyncio.sleep(delay_seconds)
+            params: Dict[str, Any] = {
+                "actor": account_did,
+                "limit": min(100, page_size),
+            }
+            if cursor:
+                params["cursor"] = cursor
 
-        try:
-            data = client.get("/xrpc/app.bsky.graph.getFollows", params=params)
+            attempts = 0
+            backoff = 1.0
+            data = None
+
+            while attempts < max_retries:
+                try:
+                    response = await client.get("/xrpc/app.bsky.graph.getFollows", params=params)
+                    if response.status_code == 200:
+                        data = response.json()
+                        break
+                    elif response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        sleep_time = float(retry_after) if retry_after else backoff
+                        if logger:
+                            logger.warning(f"Rate limited (429) for {account_did}. Sleeping {sleep_time:.1f}s.")
+                        await asyncio.sleep(sleep_time)
+                        backoff *= 2
+                        attempts += 1
+                    else:
+                        response.raise_for_status()
+                except Exception as ex:
+                    attempts += 1
+                    if attempts >= max_retries:
+                        error_msg = str(ex)
+                        break
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
+
+            if not data:
+                break
+
             raw_pages.append(data)
             follows = data.get("follows", [])
             for f in follows:
@@ -60,26 +95,24 @@ def fetch_account_follows(
             cursor = data.get("cursor")
             if not cursor or not follows:
                 break
-        except Exception as e:
-            if logger:
-                logger.error(f"Error fetching follows for {account_did}: {e}")
-            break
 
-    return followed_dids, raw_pages
+    return account_did, followed_dids, raw_pages, error_msg
 
 
-def run_snapshot_job(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Execute a full daily snapshot run for all tracked accounts."""
+async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Execute concurrent daily snapshot across all tracked accounts."""
     db_path = config.get("storage", {}).get("db_path", "/data/bluesky_panel.sqlite")
     init_db(db_path)
 
     snapshot_cfg = config.get("snapshot", {})
-    api_base = snapshot_cfg.get("api_base_url", "https://public.api.bsky.app")
+    api_base = snapshot_cfg.get("api_base_url", "https://api.bsky.app")
     page_size = snapshot_cfg.get("page_size", 100)
-    delay_seconds = snapshot_cfg.get("request_delay_seconds", 0.15)
+    delay_seconds = snapshot_cfg.get("request_delay_seconds", 0.05)
+    concurrency = snapshot_cfg.get("concurrency", 10)
+    max_retries = snapshot_cfg.get("max_retries", 5)
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    logger.info(f"--- Starting Daily Snapshot for date {today_str} ---")
+    logger.info(f"--- Starting High-Throughput Daily Snapshot for date {today_str} (Concurrency: {concurrency}) ---")
 
     conn = get_db_connection(db_path)
     try:
@@ -104,53 +137,68 @@ def run_snapshot_job(config: Dict[str, Any], logger: logging.Logger) -> None:
             )
             return
 
-        client = ResilientAppViewClient(
-            base_url=api_base,
-            request_delay_seconds=delay_seconds,
-            logger=logger,
-        )
+        semaphore = asyncio.Semaphore(concurrency)
+        headers = {"User-Agent": "BlueskyPoliticalPanelCollector/1.0 (Academic Research)"}
 
-        all_edges: List[Tuple[str, str]] = []
-        covered_count = 0
-        error_count = 0
+        async with httpx.AsyncClient(base_url=api_base, headers=headers, timeout=30.0) as client:
+            covered_count = 0
+            error_count = 0
+            batch_edges: List[Tuple[str, str]] = []
+            total_edges_saved = 0
 
-        for idx, acc in enumerate(accounts, start=1):
-            did = acc["did"]
-            handle = acc.get("handle") or did
-            logger.info(f"[{idx}/{total_accounts}] Pulling follows for @{handle} ({did})...")
+            # Process in chunks of 200 accounts to pipeline memory and DB writes
+            chunk_size = 200
+            for i in range(0, total_accounts, chunk_size):
+                chunk = accounts[i : i + chunk_size]
+                tasks = [
+                    fetch_account_follows_async(
+                        client=client,
+                        account_did=acc["did"],
+                        semaphore=semaphore,
+                        delay_seconds=delay_seconds,
+                        page_size=page_size,
+                        max_retries=max_retries,
+                        logger=logger,
+                    )
+                    for acc in chunk
+                ]
 
-            try:
-                followed_dids, raw_pages = fetch_account_follows(
-                    client=client,
-                    account_did=did,
-                    page_size=page_size,
-                    logger=logger,
-                )
+                results = await asyncio.gather(*tasks)
 
-                for f_did in followed_dids:
-                    all_edges.append((did, f_did))
+                for did, followed_dids, raw_pages, err in results:
+                    if err:
+                        error_count += 1
+                        logger.error(f"Error pulling follows for {did}: {err}")
+                    else:
+                        covered_count += 1
+                        for f_did in followed_dids:
+                            batch_edges.append((did, f_did))
 
-                # Archive raw JSON payload
-                sanitized_did = did.replace(":", "_")
-                archive_raw_json(
-                    raw_pages,
-                    f"{today_str}",
-                    f"follows_{sanitized_did}.json",
-                    config=config,
-                )
+                        if raw_pages:
+                            sanitized = did.replace(":", "_")
+                            archive_raw_json(
+                                raw_pages,
+                                f"{today_str}/follows",
+                                f"follows_{sanitized}.json",
+                                config=config,
+                            )
 
-                covered_count += 1
-            except Exception as e:
-                error_count += 1
-                logger.error(f"Failed to process follows for {handle}: {e}")
+                # Periodic DB write
+                if len(batch_edges) >= 5000 or (i + chunk_size) >= total_accounts:
+                    inserted = insert_snapshot_follows(conn, today_str, batch_edges)
+                    total_edges_saved += inserted
+                    batch_edges = []
+                    logger.info(
+                        f"Progress: [{min(i + chunk_size, total_accounts)}/{total_accounts} accounts] — {total_edges_saved} edges saved..."
+                    )
 
-        # Insert snapshot rows
-        logger.info(f"Writing {len(all_edges)} follow edges to follows_snapshot for {today_str}...")
-        insert_snapshot_follows(conn, today_str, all_edges)
+        # Flush any remaining edges
+        if batch_edges:
+            inserted = insert_snapshot_follows(conn, today_str, batch_edges)
+            total_edges_saved += inserted
 
-        # Snapshot diffing against previous snapshot
+        # Snapshot diffing against previous snapshot date
         existing_dates = get_snapshot_dates(conn)
-        # Filter previous dates strictly before today
         prior_dates = [d for d in existing_dates if d < today_str]
 
         new_follows_count = 0
@@ -158,34 +206,28 @@ def run_snapshot_job(config: Dict[str, Any], logger: logging.Logger) -> None:
 
         if prior_dates:
             previous_date = prior_dates[-1]
-            logger.info(
-                f"Diffing snapshot {today_str} against previous snapshot {previous_date}..."
-            )
+            logger.info(f"Diffing snapshot {today_str} against previous snapshot {previous_date}...")
             new_follows_count, unfollows_count = diff_snapshot_dates(
                 conn, current_date=today_str, previous_date=previous_date
             )
-            logger.info(
-                f"Snapshot diff complete: +{new_follows_count} new follows, -{unfollows_count} unfollows detected."
-            )
+            logger.info(f"Snapshot diff complete: +{new_follows_count} new follows, -{unfollows_count} unfollows detected.")
         else:
-            logger.info(
-                f"This is the baseline snapshot for {today_str}. No prior snapshot to diff against."
-            )
+            logger.info(f"This is the baseline snapshot for {today_str}. No prior snapshot to diff against.")
 
-        summary_details = {
+        summary = {
             "snapshot_date": today_str,
             "accounts_targeted": total_accounts,
             "accounts_covered": covered_count,
             "errors": error_count,
-            "total_edges": len(all_edges),
+            "total_edges": total_edges_saved,
             "diff_new_follows": new_follows_count,
             "diff_unfollows": unfollows_count,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 
         status = "UP" if error_count == 0 else "DEGRADED"
-        record_heartbeat(conn, "daily_snapshot", status, summary_details)
-        logger.info(f"Daily snapshot finished successfully! {json.dumps(summary_details)}")
+        record_heartbeat(conn, "daily_snapshot", status, summary)
+        logger.info(f"Daily snapshot completed successfully! {json.dumps(summary)}")
 
     except Exception as e:
         logger.error(f"Fatal error during snapshot run: {e}", exc_info=True)
@@ -199,8 +241,13 @@ def run_snapshot_job(config: Dict[str, Any], logger: logging.Logger) -> None:
         conn.close()
 
 
+def run_snapshot_job(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Wrapper to run async snapshot in standard event loop."""
+    asyncio.run(run_snapshot_async(config, logger))
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Daily follow network snapshot service.")
+    parser = argparse.ArgumentParser(description="High-throughput daily follow network snapshot service.")
     parser.add_argument("--once", action="store_true", help="Run once and exit immediately.")
     args = parser.parse_args()
 
@@ -227,7 +274,6 @@ def main():
     )
 
     logger.info(f"Daily snapshot service scheduler started. Scheduled daily at {sched_time} UTC.")
-    # Also record initial heartbeat
     conn = get_db_connection(config.get("storage", {}).get("db_path", "/data/bluesky_panel.sqlite"))
     record_heartbeat(conn, "daily_snapshot", "IDLE", {"schedule": f"{sched_time} UTC"})
     conn.close()

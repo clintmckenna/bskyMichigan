@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     did TEXT PRIMARY KEY,
     handle TEXT,
     tier TEXT,
+    entry_method TEXT DEFAULT 'keyword_search',
     first_seen TEXT,
     source_query_or_post TEXT,
     likely_bot INTEGER DEFAULT 0,
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_tier ON accounts(tier);
+CREATE INDEX IF NOT EXISTS idx_accounts_entry_method ON accounts(entry_method);
 CREATE INDEX IF NOT EXISTS idx_accounts_likely_bot ON accounts(likely_bot);
 
 CREATE TABLE IF NOT EXISTS follows_snapshot (
@@ -126,6 +128,11 @@ def init_db(db_path: str) -> None:
     try:
         with conn:
             conn.executescript(SCHEMA_SQL)
+            # Automatic schema migration for existing databases
+            try:
+                conn.execute("ALTER TABLE accounts ADD COLUMN entry_method TEXT DEFAULT 'keyword_search';")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         logger.info(f"Database initialized successfully at {db_path}")
     finally:
         conn.close()
@@ -136,8 +143,8 @@ def bulk_upsert_accounts(conn: sqlite3.Connection, accounts: List[Dict[str, Any]
     if not accounts:
         return 0
 
-    # Tier priority hierarchy: poster > replier > reposter
-    tier_weights = {"poster": 3, "replier": 2, "reposter": 1}
+    # Tier priority hierarchy: poster > replier > reposter > follower
+    tier_weights = {"poster": 4, "replier": 3, "reposter": 2, "follower": 1}
 
     inserted_or_updated = 0
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -147,22 +154,23 @@ def bulk_upsert_accounts(conn: sqlite3.Connection, accounts: List[Dict[str, Any]
             did = acc["did"]
             handle = acc.get("handle")
             tier = acc.get("tier", "poster")
+            entry_method = acc.get("entry_method", "keyword_search")
             source = acc.get("source_query_or_post")
             likely_bot = 1 if acc.get("likely_bot") else 0
             metadata = json.dumps(acc.get("metadata", {}))
 
             cursor = conn.execute(
-                "SELECT tier, first_seen, likely_bot FROM accounts WHERE did = ?", (did,)
+                "SELECT tier, first_seen, likely_bot, entry_method FROM accounts WHERE did = ?", (did,)
             )
             row = cursor.fetchone()
 
             if row is None:
                 conn.execute(
                     """
-                    INSERT INTO accounts (did, handle, tier, first_seen, source_query_or_post, likely_bot, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO accounts (did, handle, tier, entry_method, first_seen, source_query_or_post, likely_bot, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (did, handle, tier, now_iso, source, likely_bot, metadata),
+                    (did, handle, tier, entry_method, now_iso, source, likely_bot, metadata),
                 )
                 inserted_or_updated += 1
             else:
@@ -170,17 +178,19 @@ def bulk_upsert_accounts(conn: sqlite3.Connection, accounts: List[Dict[str, Any]
                 existing_weight = tier_weights.get(existing_tier, 0)
                 new_weight = tier_weights.get(tier, 0)
                 best_tier = tier if new_weight > existing_weight else existing_tier
+                existing_entry = row["entry_method"] or "keyword_search"
 
                 conn.execute(
                     """
                     UPDATE accounts
                     SET handle = COALESCE(?, handle),
                         tier = ?,
+                        entry_method = COALESCE(entry_method, ?),
                         likely_bot = MAX(likely_bot, ?),
                         metadata_json = COALESCE(?, metadata_json)
                     WHERE did = ?
                     """,
-                    (handle, best_tier, likely_bot, metadata, did),
+                    (handle, best_tier, entry_method, likely_bot, metadata, did),
                 )
                 inserted_or_updated += 1
 
@@ -456,7 +466,7 @@ def log_seed_query(
 
 def get_dashboard_metrics(conn: sqlite3.Connection) -> Dict[str, Any]:
     """Compute aggregate metrics for the monitor dashboard."""
-    # 1. Total accounts & tier breakdown
+    # 1. Total accounts & tier breakdown & entry method breakdown
     acc_cursor = conn.execute(
         """
         SELECT 
@@ -464,6 +474,8 @@ def get_dashboard_metrics(conn: sqlite3.Connection) -> Dict[str, Any]:
             SUM(CASE WHEN tier = 'poster' THEN 1 ELSE 0 END) as posters,
             SUM(CASE WHEN tier = 'replier' THEN 1 ELSE 0 END) as repliers,
             SUM(CASE WHEN tier = 'reposter' THEN 1 ELSE 0 END) as reposters,
+            SUM(CASE WHEN tier = 'follower' THEN 1 ELSE 0 END) as followers,
+            SUM(CASE WHEN entry_method = 'candidate_follower' THEN 1 ELSE 0 END) as candidate_followers,
             SUM(CASE WHEN likely_bot = 1 THEN 1 ELSE 0 END) as likely_bots
         FROM accounts
         """

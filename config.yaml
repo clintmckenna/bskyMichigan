@@ -11,7 +11,12 @@ storage:
 
 # Seeder Configuration
 seeder:
-  # Michigan news hubs and civic bridge accounts
+  # 1. Direct candidate follower ingestion (explicitly tagged as entry_method: 'candidate_follower')
+  candidate_follower_seeds:
+    - handle: "abdulelsayed.bsky.social"
+      max_followers: null  # null pulls all ~58,500 followers
+
+  # 2. Michigan news hubs and civic bridge accounts (tagged as entry_method: 'press_hub')
   seed_accounts:
     - "bridgemi.com"
     - "freep.com"
@@ -21,7 +26,7 @@ seeder:
   # How many recent posts from each seed account to crawl for repliers and reposters
   seed_account_post_crawl_limit: 30
 
-  # 2. Search queries for discovering nodes across the Michigan political spectrum
+  # 3. Search queries for discovering nodes across the Michigan political spectrum (tagged as entry_method: 'keyword_search')
   queries:
     - "Abdul El-Sayed"
     - "El-Sayed Senate"
@@ -68,7 +73,8 @@ snapshot:
   schedule_time_utc: "03:00"
   run_interval_hours: 24
   page_size: 100
-  request_delay_seconds: 0.15
+  concurrency: 10
+  request_delay_seconds: 0.05
   max_retries: 5
   base_backoff_seconds: 2.0
 
@@ -79,7 +85,8 @@ post_collector:
   run_interval_hours: 24
   initial_lookback_days: 30
   max_posts_per_account: 100
-  request_delay_seconds: 0.15
+  concurrency: 10
+  request_delay_seconds: 0.05
 
 # Monitor UI Dashboard Settings
 monitor:
