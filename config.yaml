@@ -11,11 +11,12 @@ storage:
 
 # Seeder Configuration
 seeder:
-  # Michigan news hubs, and political institutions
-  - "bridgemi.com"
-  - "freep.com"
-  - "detroitnews.com"
-  - "michiganpublic.org"
+  # Michigan news hubs and civic bridge accounts
+  seed_accounts:
+    - "bridgemi.com"
+    - "freep.com"
+    - "detroitnews.com"
+    - "michiganpublic.org"
   
   # How many recent posts from each seed account to crawl for repliers and reposters
   seed_account_post_crawl_limit: 30
