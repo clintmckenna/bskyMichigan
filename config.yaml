@@ -1,0 +1,87 @@
+# ==============================================================================
+# Bluesky Political Network Panel Collector Configuration
+# Target: 2026 Michigan Senate Race (Abdul El-Sayed vs. Mike Rogers)
+# ==============================================================================
+
+# Database & File Storage Settings
+storage:
+  db_path: "/data/bluesky_panel.sqlite"
+  raw_snapshots_dir: "/data/raw_snapshots"
+  logs_dir: "/data/logs"
+
+# Seeder Configuration
+seeder:
+  # Search queries for discovering nodes in the political network
+  queries:
+    - "Abdul El-Sayed"
+    - "El-Sayed Senate"
+    - "Mike Rogers"
+    - "Rogers Senate"
+    - "Michigan Senate"
+    - "MI Senate"
+    - "#MISen"
+    - "#MISenate"
+    - "El-Sayed"
+    - "Rogers Michigan"
+  # How many days back to search (public AppView search typically reaches ~30 days)
+  since_days: 30
+  # Maximum posts to retrieve per query term during seeding
+  max_posts_per_query: 200
+  # Whether to fetch replies and reposts to expand tier nodes
+  fetch_replies: true
+  fetch_reposts: true
+  # Bot detection heuristics
+  bot_heuristics:
+    # Flag account if following > threshold and followers < threshold
+    flag_high_following_ratio: true
+    min_following_for_ratio_check: 200
+    max_followers_for_suspicious: 5
+    # Flag accounts without display name or bio
+    flag_empty_profile: true
+
+# Firehose Listener Configuration
+firehose:
+  # Public WebSocket relay endpoint
+  relay_url: "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos"
+  # How frequently (in seconds) to reload tracked DIDs from the database
+  did_reload_interval_seconds: 300
+  # How frequently (in seconds) to persist heartbeat and cursor checkpoint
+  checkpoint_interval_seconds: 15
+  # Exponential backoff parameters on connection loss (seconds)
+  reconnect_min_delay: 2
+  reconnect_max_delay: 60
+
+# Daily Follows Snapshot Configuration
+snapshot:
+  # AppView public API endpoint (no authentication required for public reads)
+  api_base_url: "https://public.api.bsky.app"
+  # Scheduled run time in 24h format (UTC or local container time)
+  schedule_time_utc: "03:00"
+  # Standalone interval in seconds if running with interval scheduler
+  run_interval_hours: 24
+  # Page size for app.bsky.graph.getFollows (max 100)
+  page_size: 100
+  # Delay between API requests to respect public rate limits (seconds)
+  request_delay_seconds: 0.15
+  # Rate limit retry settings (429 handling)
+  max_retries: 5
+  base_backoff_seconds: 2.0
+
+# Post Collector Configuration
+post_collector:
+  api_base_url: "https://public.api.bsky.app"
+  # Scheduled run time (UTC)
+  schedule_time_utc: "04:00"
+  run_interval_hours: 24
+  # Initial historical lookback if an account has never had posts pulled (days)
+  initial_lookback_days: 30
+  # Maximum posts to pull per account per run
+  max_posts_per_account: 100
+  request_delay_seconds: 0.15
+
+# Monitor UI Dashboard Settings
+monitor:
+  host: "0.0.0.0"
+  port: 8123
+  # Frontend auto-refresh interval in seconds
+  auto_refresh_seconds: 60

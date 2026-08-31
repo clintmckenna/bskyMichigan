@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="{{ auto_refresh_seconds }}">
+  <title>Bluesky Political Network Panel Monitor | 2026 MI Senate</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+              900: '#0c4a6e',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  
+  <!-- Navigation / Top Header -->
+  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div class="flex items-center space-x-3">
+        <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+            Bluesky Political Network Panel
+            <span class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-sky-950 text-sky-400 border border-sky-800">
+              2026 MI Senate Study
+            </span>
+          </h1>
+          <p class="text-xs text-slate-400">Continuous Network Rewiring & Unfollow Panel Collector</p>
+        </div>
+      </div>
+      
+      <div class="flex items-center space-x-4">
+        <div class="text-right hidden sm:block">
+          <div class="text-xs text-slate-400">Auto-refreshing every {{ auto_refresh_seconds }}s</div>
+          <div class="text-xs font-mono text-slate-500 truncate max-w-xs">{{ db_path }}</div>
+        </div>
+        <button onclick="window.location.reload()" class="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition flex items-center gap-1.5 shadow-sm">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          Refresh Now
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    
+    <!-- Top Metric Cards -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <!-- Total Nodes -->
+      <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+        <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Tracked Panel Nodes</div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-3xl font-extrabold text-white">{{ stats.accounts.total_accounts or 0 }}</span>
+          <span class="text-xs text-slate-400">accounts</span>
+        </div>
+        <div class="mt-3 flex items-center gap-2 text-xs flex-wrap">
+          <span class="px-2 py-0.5 rounded bg-sky-950/80 text-sky-400 border border-sky-900">
+            {{ stats.accounts.posters or 0 }} Posters
+          </span>
+          <span class="px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-400 border border-indigo-900">
+            {{ stats.accounts.repliers or 0 }} Repliers
+          </span>
+          <span class="px-2 py-0.5 rounded bg-purple-950/80 text-purple-400 border border-purple-900">
+            {{ stats.accounts.reposters or 0 }} Reposters
+          </span>
+        </div>
+      </div>
+
+      <!-- Likely Bots -->
+      <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+        <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Likely Bot Accounts</div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-3xl font-extrabold text-amber-400">{{ stats.accounts.likely_bots or 0 }}</span>
+          <span class="text-xs text-slate-400">flagged (heuristic)</span>
+        </div>
+        <p class="mt-3 text-xs text-slate-500">Separable in post-hoc panel analysis</p>
+      </div>
+
+      <!-- Total Posts -->
+      <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+        <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Posts & Reposts Archived</div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-3xl font-extrabold text-emerald-400">{{ stats.total_posts or 0 }}</span>
+          <span class="text-xs text-slate-400">content records</span>
+        </div>
+        <p class="mt-3 text-xs text-slate-500">Authored content for qualitative / NLP analysis</p>
+      </div>
+
+      <!-- Total Unfollows Detected -->
+      <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+        <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Recent Unfollows</div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-3xl font-extrabold text-rose-400">{{ stats.recent_unfollows|length }}</span>
+          <span class="text-xs text-slate-400">latest detected</span>
+        </div>
+        <p class="mt-3 text-xs text-slate-500">Firehose real-time + snapshot diffs</p>
+      </div>
+    </section>
+
+    <!-- Service Health & Pipeline Status -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Pipeline Service Health</h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        
+        <!-- Firehose Listener Card -->
+        {% set fh = stats.service_statuses.get('firehose_listener', {}) %}
+        {% set fh_status = fh.get('status', 'OFFLINE') %}
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="relative flex h-3 w-3">
+                {% if fh_status == 'UP' %}
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                {% else %}
+                <span class="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                {% endif %}
+              </span>
+              <span class="text-sm font-bold text-white">Firehose Listener</span>
+            </div>
+            <span class="px-2 py-0.5 text-xs font-semibold rounded-full {% if fh_status == 'UP' %}bg-emerald-950 text-emerald-400 border border-emerald-800{% else %}bg-amber-950 text-amber-400 border border-amber-800{% endif %}">
+              {{ fh_status }}
+            </span>
+          </div>
+          <div class="mt-4 space-y-1.5 text-xs">
+            <div class="flex justify-between text-slate-400">
+              <span>Last Heartbeat:</span>
+              <span class="font-mono text-slate-300">{{ fh.get('last_heartbeat', 'Never')[:19] }}</span>
+            </div>
+            <div class="flex justify-between text-slate-400">
+              <span>Tracked DIDs in Memory:</span>
+              <span class="font-semibold text-slate-200">{{ fh.get('details', {}).get('tracked_dids_count', 0) }}</span>
+            </div>
+            <div class="flex justify-between text-slate-400">
+              <span>Matched Follow Events:</span>
+              <span class="font-semibold text-sky-400">{{ fh.get('details', {}).get('matched_events', 0) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Daily Snapshot Service Card -->
+        {% set sn = stats.service_statuses.get('daily_snapshot', {}) %}
+        {% set sn_status = sn.get('status', 'IDLE') %}
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="h-3 w-3 rounded-full {% if sn_status in ['UP', 'RUNNING'] %}bg-emerald-500{% else %}bg-slate-500{% endif %}"></span>
+              <span class="text-sm font-bold text-white">Daily Snapshot Service</span>
+            </div>
+            <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+              {{ sn_status }}
+            </span>
+          </div>
+          <div class="mt-4 space-y-1.5 text-xs">
+            <div class="flex justify-between text-slate-400">
+              <span>Last Run:</span>
+              <span class="font-mono text-slate-300">{{ sn.get('last_heartbeat', 'Never')[:19] }}</span>
+            </div>
+            <div class="flex justify-between text-slate-400">
+              <span>Accounts Covered:</span>
+              <span class="font-semibold text-slate-200">
+                {{ sn.get('details', {}).get('accounts_covered', 0) }} / {{ sn.get('details', {}).get('accounts_targeted', stats.accounts.total_accounts or 0) }}
+              </span>
+            </div>
+            <div class="flex justify-between text-slate-400">
+              <span>Errors / Retries:</span>
+              <span class="font-semibold {% if sn.get('details', {}).get('errors', 0) > 0 %}text-rose-400{% else %}text-emerald-400{% endif %}">
+                {{ sn.get('details', {}).get('errors', 0) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Post Collector Service Card -->
+        {% set pc = stats.service_statuses.get('post_collector', {}) %}
+        {% set pc_status = pc.get('status', 'IDLE') %}
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="h-3 w-3 rounded-full {% if pc_status in ['UP', 'RUNNING'] %}bg-emerald-500{% else %}bg-slate-500{% endif %}"></span>
+              <span class="text-sm font-bold text-white">Post Collector</span>
+            </div>
+            <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+              {{ pc_status }}
+            </span>
+          </div>
+          <div class="mt-4 space-y-1.5 text-xs">
+            <div class="flex justify-between text-slate-400">
+              <span>Last Run:</span>
+              <span class="font-mono text-slate-300">{{ pc.get('last_heartbeat', 'Never')[:19] }}</span>
+            </div>
+            <div class="flex justify-between text-slate-400">
+              <span>Posts Saved in Last Run:</span>
+              <span class="font-semibold text-slate-200">{{ pc.get('details', {}).get('posts_saved', 0) }}</span>
+            </div>
+            <div class="flex justify-between text-slate-400">
+              <span>Errors:</span>
+              <span class="font-semibold {% if pc.get('details', {}).get('errors', 0) > 0 %}text-rose-400{% else %}text-emerald-400{% endif %}">
+                {{ pc.get('details', {}).get('errors', 0) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Network Dynamics Chart -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+        <div>
+          <h2 class="text-base font-bold text-white">Network Follow Events Per Day</h2>
+          <p class="text-xs text-slate-400">Follow creations vs. follow deletions (unfollows) detected over time</p>
+        </div>
+      </div>
+      <div class="relative h-64 w-full">
+        <canvas id="eventsChart"></canvas>
+      </div>
+    </section>
+
+    <!-- Recent Unfollows Table -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl shadow-lg overflow-hidden">
+      <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-white">Recent Unfollow Events</h2>
+          <p class="text-xs text-slate-400">Chronological stream of network ties broken</p>
+        </div>
+        <span class="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300 font-mono">
+          Showing {{ stats.recent_unfollows|length }} items
+        </span>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-800 text-left text-xs">
+          <thead class="bg-slate-950/60 text-slate-400 uppercase tracking-wider font-semibold">
+            <tr>
+              <th scope="col" class="px-6 py-3">Detected At (UTC)</th>
+              <th scope="col" class="px-6 py-3">Unfollower (Actor)</th>
+              <th scope="col" class="px-6 py-3">Unfollowed Account</th>
+              <th scope="col" class="px-6 py-3">Detection Source</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/60 text-slate-300">
+            {% if stats.recent_unfollows %}
+              {% for event in stats.recent_unfollows %}
+              <tr class="hover:bg-slate-800/40 transition">
+                <td class="px-6 py-3.5 font-mono text-slate-400 whitespace-nowrap">
+                  {{ event.detected_at[:19] }}
+                </td>
+                <td class="px-6 py-3.5 whitespace-nowrap">
+                  <span class="font-medium text-white">@{{ event.handle_from }}</span>
+                  <span class="block text-[10px] text-slate-500 font-mono">{{ event.did_from }}</span>
+                </td>
+                <td class="px-6 py-3.5 whitespace-nowrap">
+                  {% if event.handle_to %}
+                    <span class="font-medium text-rose-300">@{{ event.handle_to }}</span>
+                    <span class="block text-[10px] text-slate-500 font-mono">{{ event.did_to or 'Unknown DID' }}</span>
+                  {% else %}
+                    <span class="text-slate-500 italic">{{ event.did_to or 'Unresolved target' }}</span>
+                  {% endif %}
+                </td>
+                <td class="px-6 py-3.5 whitespace-nowrap">
+                  {% if event.source == 'firehose' %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-950 text-indigo-300 border border-indigo-800">
+                    ⚡ Firehose
+                  </span>
+                  {% else %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-amber-950 text-amber-300 border border-amber-800">
+                    🔄 Snapshot Diff
+                  </span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td colspan="4" class="px-6 py-8 text-center text-slate-500 italic">
+                  No unfollow events recorded yet. Once the firehose runs or the daily snapshot diffs two dates, detected unfollows will appear here.
+                </td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Daily Snapshots Coverage Summary -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
+      <h2 class="text-base font-bold text-white mb-3">Daily Snapshot History (Panel Ground Truth)</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-3">
+        {% if stats.recent_snapshots %}
+          {% for snap in stats.recent_snapshots %}
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-center">
+            <div class="text-xs font-mono text-slate-400 font-semibold">{{ snap.snapshot_date }}</div>
+            <div class="mt-1 text-sm font-bold text-sky-400">{{ snap.accounts_covered }} <span class="text-[10px] text-slate-500 font-normal">nodes</span></div>
+            <div class="text-[11px] text-slate-400 font-mono">{{ snap.total_edges }} edges</div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="col-span-full py-4 text-center text-xs text-slate-500 italic">
+            No snapshots recorded yet. The daily snapshot service will populate this once executed.
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Chart.js Setup Script -->
+  <script>
+    const eventData = {{ stats.events_per_day | tojson }};
+    const labels = eventData.map(d => d.event_date);
+    const creates = eventData.map(d => d.creates);
+    const deletes = eventData.map(d => d.deletes);
+
+    const ctx = document.getElementById('eventsChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels.length ? labels : ['Today'],
+        datasets: [
+          {
+            label: 'New Follows (Creates)',
+            data: creates.length ? creates : [0],
+            borderColor: '#38bdf8',
+            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+          },
+          {
+            label: 'Unfollows (Deletes)',
+            data: deletes.length ? deletes : [0],
+            borderColor: '#f43f5e',
+            backgroundColor: 'rgba(244, 63, 94, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            grid: { color: 'rgba(51, 65, 85, 0.3)' },
+            ticks: { color: '#94a3b8' }
+          },
+          y: {
+            beginAtZero: true,
+            grid: { color: 'rgba(51, 65, 85, 0.3)' },
+            ticks: { color: '#94a3b8', precision: 0 }
+          }
+        },
+        plugins: {
+          legend: {
+            labels: { color: '#e2e8f0', font: { family: 'Inter', size: 12 } }
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

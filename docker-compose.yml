@@ -1,0 +1,80 @@
+services:
+  # 1. Seeder (On-demand CLI service: run via `docker compose run seeder`)
+  seeder:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    container_name: bsky_seeder
+    command: ["python", "-m", "collector.seeder"]
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CONFIG_PATH=/app/config.yaml
+    profiles:
+      - cli
+    restart: "no"
+
+  # 2. Firehose Listener (Continuous WebSocket subscriber to AT Protocol Firehose)
+  firehose-listener:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    container_name: bsky_firehose_listener
+    command: ["python", "-m", "collector.firehose_listener"]
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CONFIG_PATH=/app/config.yaml
+    restart: unless-stopped
+
+  # 3. Daily Snapshot Service (Scheduled daily pull of full follow lists + diff engine)
+  daily-snapshot:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    container_name: bsky_daily_snapshot
+    command: ["python", "-m", "collector.snapshot"]
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CONFIG_PATH=/app/config.yaml
+    restart: unless-stopped
+
+  # 4. Post Collector Service (Scheduled incremental authored posts collector)
+  post-collector:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    container_name: bsky_post_collector
+    command: ["python", "-m", "collector.post_collector"]
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CONFIG_PATH=/app/config.yaml
+    restart: unless-stopped
+
+  # 5. Monitor UI Dashboard (Read-only monitoring web interface on port 8123)
+  monitor-ui:
+    build:
+      context: .
+      dockerfile: monitor/Dockerfile
+    container_name: bsky_monitor_ui
+    command: ["uvicorn", "monitor.app:app", "--host", "0.0.0.0", "--port", "8123"]
+    ports:
+      - "${MONITOR_PORT:-8123}:8123"
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CONFIG_PATH=/app/config.yaml
+      - DB_PATH=/data/bluesky_panel.sqlite
+    restart: unless-stopped
