@@ -59,6 +59,18 @@ def crawl_candidate_followers(
     Ingest followers of a candidate account, tagging each with entry_method='candidate_follower'.
     Upserts in high-performance batches.
     """
+    # Check if this candidate account's followers have already been ingested
+    cursor_check = conn.execute(
+        "SELECT COUNT(*) as cnt FROM accounts WHERE source_query_or_post LIKE ?",
+        (f"follower_of:{handle}%",),
+    )
+    existing_cnt = cursor_check.fetchone()["cnt"]
+    if existing_cnt > 5000 and not max_followers:
+        logger.info(
+            f"Candidate followers for @{handle} already ingested ({existing_cnt} accounts in DB). Skipping to conserve API limits."
+        )
+        return existing_cnt
+
     logger.info(f"Ingesting followers for candidate account @{handle} (target: {max_followers or 'ALL'})...")
     cursor: Optional[str] = None
     total_upserted = 0
@@ -315,6 +327,7 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
             logger.info("=== Phase 3: Keyword Search Across Michigan Political Discourse (entry_method='keyword_search') ===")
             for query in queries:
                 logger.info(f"Searching posts for query: '{query}'...")
+                time.sleep(0.5)
                 until_timestamp = None
                 posts_for_query = []
                 nodes_for_query: List[Dict[str, Any]] = []
@@ -331,7 +344,8 @@ def run_seeder(config: Dict[str, Any], logger: logging.Logger) -> None:
                     try:
                         data = client.get("/xrpc/app.bsky.feed.searchPosts", params=params)
                     except Exception as e:
-                        logger.error(f"Error querying searchPosts for '{query}': {e}")
+                        logger.warning(f"Rate limit / error on query '{query}' ({e}). Waiting 5s before continuing...")
+                        time.sleep(5.0)
                         break
 
                     posts = data.get("posts", [])
