@@ -5,7 +5,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -16,12 +16,13 @@ from collector.db import (
     get_all_accounts,
     get_db_connection,
     get_snapshot_dates,
+    get_tracked_dids,
     init_db,
     insert_snapshot_follows,
     record_heartbeat,
 )
 from collector.utils import (
-    archive_raw_json,
+    append_raw_jsonl_gz,
     load_config,
     setup_logger,
 )
@@ -30,6 +31,7 @@ from collector.utils import (
 async def fetch_account_follows_async(
     client: httpx.AsyncClient,
     account_did: str,
+    tracked_dids: Set[str],
     semaphore: asyncio.Semaphore,
     delay_seconds: float = 0.05,
     page_size: int = 100,
@@ -37,10 +39,11 @@ async def fetch_account_follows_async(
     logger: Optional[logging.Logger] = None,
 ) -> Tuple[str, List[str], List[Dict[str, Any]], Optional[str]]:
     """
-    Asynchronously fetch all followed accounts for `account_did`.
-    Returns (account_did, list_of_followed_dids, raw_pages, error_message).
+    Asynchronously fetch followed accounts for `account_did`.
+    Filters followed accounts to the induced panel subgraph (did_to in tracked_dids).
+    Returns (account_did, list_of_panel_followed_dids, raw_pages, error_message).
     """
-    followed_dids: List[str] = []
+    panel_followed_dids: List[str] = []
     raw_pages: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
     error_msg: Optional[str] = None
@@ -89,18 +92,20 @@ async def fetch_account_follows_async(
             raw_pages.append(data)
             follows = data.get("follows", [])
             for f in follows:
-                if f.get("did"):
-                    followed_dids.append(f["did"])
+                f_did = f.get("did")
+                # Induced subgraph filter: only save ties where target is in tracked panel
+                if f_did and f_did in tracked_dids:
+                    panel_followed_dids.append(f_did)
 
             cursor = data.get("cursor")
             if not cursor or not follows:
                 break
 
-    return account_did, followed_dids, raw_pages, error_msg
+    return account_did, panel_followed_dids, raw_pages, error_msg
 
 
 async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Execute concurrent daily snapshot across all tracked accounts."""
+    """Execute high-performance induced subgraph daily snapshot across all tracked accounts."""
     db_path = config.get("storage", {}).get("db_path", "/data/bluesky_panel.sqlite")
     init_db(db_path)
 
@@ -112,7 +117,9 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
     max_retries = snapshot_cfg.get("max_retries", 5)
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    logger.info(f"--- Starting High-Throughput Daily Snapshot for date {today_str} (Concurrency: {concurrency}) ---")
+    logger.info(
+        f"--- Starting Induced Subgraph Daily Snapshot for {today_str} (Workers: {concurrency}) ---"
+    )
 
     conn = get_db_connection(db_path)
     try:
@@ -125,7 +132,8 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
 
         accounts = get_all_accounts(conn)
         total_accounts = len(accounts)
-        logger.info(f"Targeting {total_accounts} tracked accounts.")
+        tracked_dids = get_tracked_dids(conn)
+        logger.info(f"Loaded {len(tracked_dids)} tracked panel DIDs for subgraph filtering.")
 
         if total_accounts == 0:
             logger.warning("No tracked accounts found in DB. Run the seeder first.")
@@ -144,9 +152,9 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
             covered_count = 0
             error_count = 0
             batch_edges: List[Tuple[str, str]] = []
+            raw_archive_batch: List[Dict[str, Any]] = []
             total_edges_saved = 0
 
-            # Process in chunks of 200 accounts to pipeline memory and DB writes
             chunk_size = 200
             for i in range(0, total_accounts, chunk_size):
                 chunk = accounts[i : i + chunk_size]
@@ -154,6 +162,7 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
                     fetch_account_follows_async(
                         client=client,
                         account_did=acc["did"],
+                        tracked_dids=tracked_dids,
                         semaphore=semaphore,
                         delay_seconds=delay_seconds,
                         page_size=page_size,
@@ -165,31 +174,37 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
 
                 results = await asyncio.gather(*tasks)
 
-                for did, followed_dids, raw_pages, err in results:
+                for did, followed_in_panel, raw_pages, err in results:
                     if err:
                         error_count += 1
                         logger.error(f"Error pulling follows for {did}: {err}")
                     else:
                         covered_count += 1
-                        for f_did in followed_dids:
-                            batch_edges.append((did, f_did))
+                        for target_did in followed_in_panel:
+                            batch_edges.append((did, target_did))
 
                         if raw_pages:
-                            sanitized = did.replace(":", "_")
-                            archive_raw_json(
-                                raw_pages,
-                                f"{today_str}/follows",
-                                f"follows_{sanitized}.json",
-                                config=config,
-                            )
+                            raw_archive_batch.append({"did_from": did, "pages": raw_pages})
 
-                # Periodic DB write
+                # Stream raw archive to compressed .jsonl.gz (replaces 60k files)
+                if raw_archive_batch:
+                    append_raw_jsonl_gz(
+                        raw_archive_batch,
+                        f"{today_str}",
+                        "follows.jsonl.gz",
+                        config=config,
+                    )
+                    raw_archive_batch = []
+
+                # Periodic SQLite batch insert & WAL passive checkpoint
                 if len(batch_edges) >= 5000 or (i + chunk_size) >= total_accounts:
-                    inserted = insert_snapshot_follows(conn, today_str, batch_edges)
-                    total_edges_saved += inserted
-                    batch_edges = []
+                    if batch_edges:
+                        inserted = insert_snapshot_follows(conn, today_str, batch_edges)
+                        total_edges_saved += inserted
+                        batch_edges = []
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
                     logger.info(
-                        f"Progress: [{min(i + chunk_size, total_accounts)}/{total_accounts} accounts] — {total_edges_saved} edges saved..."
+                        f"Progress: [{min(i + chunk_size, total_accounts)}/{total_accounts} accounts] — {total_edges_saved} panel edges saved..."
                     )
 
         # Flush any remaining edges
@@ -210,16 +225,18 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
             new_follows_count, unfollows_count = diff_snapshot_dates(
                 conn, current_date=today_str, previous_date=previous_date
             )
-            logger.info(f"Snapshot diff complete: +{new_follows_count} new follows, -{unfollows_count} unfollows detected.")
+            logger.info(
+                f"Snapshot diff complete: +{new_follows_count} new follows, -{unfollows_count} unfollows detected."
+            )
         else:
-            logger.info(f"This is the baseline snapshot for {today_str}. No prior snapshot to diff against.")
+            logger.info(f"Baseline snapshot complete for {today_str} ({total_edges_saved} political ties).")
 
         summary = {
             "snapshot_date": today_str,
             "accounts_targeted": total_accounts,
             "accounts_covered": covered_count,
             "errors": error_count,
-            "total_edges": total_edges_saved,
+            "panel_edges_saved": total_edges_saved,
             "diff_new_follows": new_follows_count,
             "diff_unfollows": unfollows_count,
             "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -258,7 +275,6 @@ def main():
         run_snapshot_job(config, logger)
         return
 
-    # Scheduled daemon mode
     snapshot_cfg = config.get("snapshot", {})
     sched_time = snapshot_cfg.get("schedule_time_utc", "03:00")
     hour, minute = [int(x) for x in sched_time.split(":")]

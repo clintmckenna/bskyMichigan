@@ -78,6 +78,8 @@ def setup_logger(service_name: str, config: Optional[Dict[str, Any]] = None) -> 
     return logger
 
 
+import gzip
+
 def archive_raw_json(
     data: Any,
     subfolder: str,
@@ -95,6 +97,27 @@ def archive_raw_json(
     target_file = target_dir / filename
     with open(target_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    return target_file
+
+
+def append_raw_jsonl_gz(
+    records: List[Dict[str, Any]],
+    subfolder: str,
+    filename: str,
+    config: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Append a batch of JSON records into a single compressed .jsonl.gz file."""
+    if config is None:
+        config = load_config()
+
+    base_dir = Path(config.get("storage", {}).get("raw_snapshots_dir", "/data/raw_snapshots"))
+    target_dir = base_dir / subfolder
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    target_file = target_dir / filename
+    with gzip.open(target_file, "at", encoding="utf-8") as f:
+        for item in records:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
     return target_file
 
 

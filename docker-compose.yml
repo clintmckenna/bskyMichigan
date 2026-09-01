@@ -12,6 +12,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - CONFIG_PATH=/app/config.yaml
+    mem_limit: 2000m
     profiles:
       - cli
     restart: "no"
@@ -29,6 +30,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - CONFIG_PATH=/app/config.yaml
+    mem_limit: 1500m
     restart: unless-stopped
 
   # 3. Daily Snapshot Service (Scheduled daily pull of full follow lists + diff engine)
@@ -44,6 +46,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - CONFIG_PATH=/app/config.yaml
+    mem_limit: 1500m
     restart: unless-stopped
 
   # 4. Post Collector Service (Scheduled incremental authored posts collector)
@@ -59,6 +62,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - CONFIG_PATH=/app/config.yaml
+    mem_limit: 1500m
     restart: unless-stopped
 
   # 5. Monitor UI Dashboard (Read-only monitoring web interface on port 8133)
@@ -77,4 +81,5 @@ services:
       - PYTHONUNBUFFERED=1
       - CONFIG_PATH=/app/config.yaml
       - DB_PATH=/data/bluesky_panel.sqlite
+    mem_limit: 1000m
     restart: unless-stopped
