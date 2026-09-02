@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import gzip
 import json
 import logging
 import time
@@ -22,7 +23,6 @@ from collector.db import (
     record_heartbeat,
 )
 from collector.utils import (
-    append_raw_jsonl_gz,
     load_config,
     setup_logger,
 )
@@ -33,24 +33,26 @@ async def fetch_account_follows_async(
     account_did: str,
     tracked_dids: Set[str],
     semaphore: asyncio.Semaphore,
-    delay_seconds: float = 0.05,
+    delay_seconds: float = 0.02,
     page_size: int = 100,
-    max_retries: int = 5,
+    max_retries: int = 4,
     logger: Optional[logging.Logger] = None,
-) -> Tuple[str, List[str], List[Dict[str, Any]], Optional[str]]:
+) -> Tuple[str, List[str], Optional[str]]:
     """
     Asynchronously fetch followed accounts for `account_did`.
     Filters followed accounts to the induced panel subgraph (did_to in tracked_dids).
-    Returns (account_did, list_of_panel_followed_dids, raw_pages, error_message).
+    Streams minimal memory footprint.
+    Returns (account_did, list_of_panel_followed_dids, error_message).
     """
     panel_followed_dids: List[str] = []
-    raw_pages: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
     error_msg: Optional[str] = None
 
     async with semaphore:
         while True:
-            await asyncio.sleep(delay_seconds)
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+
             params: Dict[str, Any] = {
                 "actor": account_did,
                 "limit": min(100, page_size),
@@ -59,7 +61,7 @@ async def fetch_account_follows_async(
                 params["cursor"] = cursor
 
             attempts = 0
-            backoff = 1.0
+            backoff = 0.5
             data = None
 
             while attempts < max_retries:
@@ -89,11 +91,9 @@ async def fetch_account_follows_async(
             if not data:
                 break
 
-            raw_pages.append(data)
             follows = data.get("follows", [])
             for f in follows:
                 f_did = f.get("did")
-                # Induced subgraph filter: only save ties where target is in tracked panel
                 if f_did and f_did in tracked_dids:
                     panel_followed_dids.append(f_did)
 
@@ -101,7 +101,7 @@ async def fetch_account_follows_async(
             if not cursor or not follows:
                 break
 
-    return account_did, panel_followed_dids, raw_pages, error_msg
+    return account_did, panel_followed_dids, error_msg
 
 
 async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -112,9 +112,9 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
     snapshot_cfg = config.get("snapshot", {})
     api_base = snapshot_cfg.get("api_base_url", "https://api.bsky.app")
     page_size = snapshot_cfg.get("page_size", 100)
-    delay_seconds = snapshot_cfg.get("request_delay_seconds", 0.05)
-    concurrency = snapshot_cfg.get("concurrency", 10)
-    max_retries = snapshot_cfg.get("max_retries", 5)
+    delay_seconds = snapshot_cfg.get("request_delay_seconds", 0.02)
+    concurrency = snapshot_cfg.get("concurrency", 15)
+    max_retries = snapshot_cfg.get("max_retries", 4)
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     logger.info(
@@ -148,14 +148,14 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
         semaphore = asyncio.Semaphore(concurrency)
         headers = {"User-Agent": "BlueskyPoliticalPanelCollector/1.0 (Academic Research)"}
 
-        async with httpx.AsyncClient(base_url=api_base, headers=headers, timeout=30.0) as client:
+        limits = httpx.Limits(max_connections=50, max_keepalive_connections=20)
+        async with httpx.AsyncClient(base_url=api_base, headers=headers, timeout=20.0, limits=limits) as client:
             covered_count = 0
             error_count = 0
             batch_edges: List[Tuple[str, str]] = []
-            raw_archive_batch: List[Dict[str, Any]] = []
             total_edges_saved = 0
 
-            chunk_size = 200
+            chunk_size = 100
             for i in range(0, total_accounts, chunk_size):
                 chunk = accounts[i : i + chunk_size]
                 tasks = [
@@ -174,38 +174,27 @@ async def run_snapshot_async(config: Dict[str, Any], logger: logging.Logger) -> 
 
                 results = await asyncio.gather(*tasks)
 
-                for did, followed_in_panel, raw_pages, err in results:
+                for did, followed_in_panel, err in results:
                     if err:
                         error_count += 1
-                        logger.error(f"Error pulling follows for {did}: {err}")
+                        logger.warning(f"Error pulling follows for {did}: {err}")
                     else:
                         covered_count += 1
                         for target_did in followed_in_panel:
                             batch_edges.append((did, target_did))
 
-                        if raw_pages:
-                            raw_archive_batch.append({"did_from": did, "pages": raw_pages})
-
-                # Stream raw archive to compressed .jsonl.gz (replaces 60k files)
-                if raw_archive_batch:
-                    append_raw_jsonl_gz(
-                        raw_archive_batch,
-                        f"{today_str}",
-                        "follows.jsonl.gz",
-                        config=config,
-                    )
-                    raw_archive_batch = []
-
                 # Periodic SQLite batch insert & WAL passive checkpoint
-                if len(batch_edges) >= 5000 or (i + chunk_size) >= total_accounts:
-                    if batch_edges:
-                        inserted = insert_snapshot_follows(conn, today_str, batch_edges)
-                        total_edges_saved += inserted
-                        batch_edges = []
+                if batch_edges:
+                    inserted = insert_snapshot_follows(conn, today_str, batch_edges)
+                    total_edges_saved += inserted
+                    batch_edges = []
                     conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
-                    logger.info(
-                        f"Progress: [{min(i + chunk_size, total_accounts)}/{total_accounts} accounts] — {total_edges_saved} panel edges saved..."
-                    )
+
+                processed_so_far = min(i + chunk_size, total_accounts)
+                pct = (processed_so_far / total_accounts) * 100
+                logger.info(
+                    f"Progress: [{processed_so_far}/{total_accounts} accounts - {pct:.1f}%] — {total_edges_saved} panel edges saved..."
+                )
 
         # Flush any remaining edges
         if batch_edges:
