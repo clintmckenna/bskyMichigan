@@ -266,21 +266,27 @@ def main():
 
     snapshot_cfg = config.get("snapshot", {})
     sched_time = snapshot_cfg.get("schedule_time_utc", "03:00")
+    day_of_week = snapshot_cfg.get("schedule_day_of_week", "sun")
     hour, minute = [int(x) for x in sched_time.split(":")]
+
+    trigger_kwargs = {"hour": hour, "minute": minute, "timezone": timezone.utc}
+    if day_of_week:
+        trigger_kwargs["day_of_week"] = day_of_week
 
     scheduler = BlockingScheduler(timezone=timezone.utc)
     scheduler.add_job(
         run_snapshot_job,
-        trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone.utc),
+        trigger=CronTrigger(**trigger_kwargs),
         args=[config, logger],
-        id="daily_snapshot_job",
-        name="Daily Follows Snapshot",
+        id="snapshot_job",
+        name="Follows Snapshot Job",
         max_instances=1,
     )
 
-    logger.info(f"Daily snapshot service scheduler started. Scheduled daily at {sched_time} UTC.")
+    sched_desc = f"Weekly on {day_of_week.upper()} at {sched_time} UTC" if day_of_week else f"Daily at {sched_time} UTC"
+    logger.info(f"Snapshot service scheduler started. Scheduled {sched_desc}.")
     conn = get_db_connection(config.get("storage", {}).get("db_path", "/data/bluesky_panel.sqlite"))
-    record_heartbeat(conn, "daily_snapshot", "IDLE", {"schedule": f"{sched_time} UTC"})
+    record_heartbeat(conn, "daily_snapshot", "IDLE", {"schedule": sched_desc})
     conn.close()
 
     try:

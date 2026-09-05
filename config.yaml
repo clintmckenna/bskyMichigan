@@ -54,7 +54,7 @@ seeder:
     max_followers_for_suspicious: 5
     flag_empty_profile: true
 
-# Firehose Listener Configuration
+# Firehose Listener Configuration (Runs 24/7 in real-time)
 firehose:
   relay_url: "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos"
   did_reload_interval_seconds: 300
@@ -62,26 +62,26 @@ firehose:
   reconnect_min_delay: 2
   reconnect_max_delay: 60
 
-# Daily Follows Snapshot Configuration
+# Follows Snapshot Configuration (Weekly Waves)
 snapshot:
   api_base_url: "https://api.bsky.app"
+  schedule_day_of_week: "sun"  # Runs weekly on Sunday (set to null for daily)
   schedule_time_utc: "03:00"
-  run_interval_hours: 24
   page_size: 100
-  concurrency: 10
-  request_delay_seconds: 0.05
-  max_retries: 5
-  base_backoff_seconds: 2.0
+  concurrency: 15
+  request_delay_seconds: 0.02
+  max_retries: 4
+  save_raw_json: false         # Set to false to keep disk usage lean (< 1 GB)
 
-# Post Collector Configuration
+# Post Collector Configuration (Weekly Waves)
 post_collector:
   api_base_url: "https://api.bsky.app"
+  schedule_day_of_week: "sun"  # Runs weekly on Sunday (set to null for daily)
   schedule_time_utc: "04:00"
-  run_interval_hours: 24
   initial_lookback_days: 30
   max_posts_per_account: 100
-  concurrency: 10
   request_delay_seconds: 0.05
+  save_raw_json: false         # Set to false to keep disk usage lean (< 1 GB)
 
 # Monitor UI Dashboard Settings
 monitor:

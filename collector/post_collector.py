@@ -26,23 +26,27 @@ from collector.utils import (
 def fetch_author_posts(
     client: ResilientAppViewClient,
     account_did: str,
-    since_iso: Optional[str] = None,
+    since_iso: str,
     max_posts: int = 100,
+    watermark_ts: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[str]]:
     """
-    Fetch posts authored by `account_did` since `since_iso`.
-    Returns (parsed_posts_list, raw_feed_items, latest_post_timestamp).
+    Fetch posts authored by `account_did` since `since_iso` or `watermark_ts`.
+    Returns (parsed_posts, raw_feed_items, latest_created_at).
     """
     parsed_posts: List[Dict[str, Any]] = []
     raw_feed_items: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
     latest_created_at: Optional[str] = None
 
+    stop_ts = watermark_ts or since_iso
+
     while len(parsed_posts) < max_posts:
         params: Dict[str, Any] = {
             "actor": account_did,
-            "limit": min(50, max_posts - len(parsed_posts)),
+            "limit": min(100, max_posts - len(parsed_posts)),
+            "filter": "posts_and_author_threads",
         }
         if cursor:
             params["cursor"] = cursor
@@ -50,43 +54,46 @@ def fetch_author_posts(
         try:
             data = client.get("/xrpc/app.bsky.feed.getAuthorFeed", params=params)
             feed = data.get("feed", [])
-            raw_feed_items.extend(feed)
-
             if not feed:
                 break
 
+            raw_feed_items.extend(feed)
             reached_watermark = False
+
             for item in feed:
                 post = item.get("post", {})
-                post_author = post.get("author", {})
+                author = post.get("author", {})
+
+                # Verify author DID matches
+                if author.get("did") != account_did:
+                    # Could be a repost of someone else's post by this author
+                    reason = item.get("reason", {})
+                    if reason.get("$type") == "app.bsky.feed.defs#reasonRepost":
+                        # Valid authored repost
+                        pass
+                    else:
+                        continue
+
                 record = post.get("record", {})
                 created_at = record.get("createdAt") or post.get("indexedAt")
-                reason = item.get("reason")  # Present if repost
 
-                # Track latest timestamp seen
-                if created_at and (latest_created_at is None or created_at > latest_created_at):
-                    latest_created_at = created_at
-
-                # If post is older than or equal to our watermark, stop pagination
-                if since_iso and created_at and created_at <= since_iso:
+                if created_at and stop_ts and created_at <= stop_ts:
                     reached_watermark = True
                     break
 
-                # Filter: Ensure it's authored by or reposted by the tracked account
-                is_repost = False
-                if reason and reason.get("$type") == "app.bsky.feed.defs#reasonRepost":
-                    reposter_did = reason.get("by", {}).get("did")
-                    if reposter_did == account_did:
-                        is_repost = True
+                if created_at:
+                    if latest_created_at is None or created_at > latest_created_at:
+                        latest_created_at = created_at
 
-                # Check author
-                if post_author.get("did") == account_did or is_repost:
+                    # Extract reply parent URI if present
                     reply_parent_uri = None
-                    reply = record.get("reply", {})
-                    if reply and reply.get("parent"):
-                        reply_parent_uri = reply["parent"].get("uri")
+                    reply_obj = record.get("reply")
+                    if reply_obj and isinstance(reply_obj, dict):
+                        parent_ref = reply_obj.get("parent", {})
+                        reply_parent_uri = parent_ref.get("uri")
 
-                    is_quote = bool(post.get("embed", {}).get("record"))
+                    is_repost = bool(item.get("reason", {}).get("$type") == "app.bsky.feed.defs#reasonRepost")
+                    is_quote = bool(record.get("embed", {}).get("$type") == "app.bsky.embed.record")
 
                     parsed_posts.append(
                         {
@@ -122,10 +129,11 @@ def run_post_collector_job(config: Dict[str, Any], logger: logging.Logger) -> No
     init_db(db_path)
 
     pc_cfg = config.get("post_collector", {})
-    api_base = pc_cfg.get("api_base_url", "https://public.api.bsky.app")
+    api_base = pc_cfg.get("api_base_url", "https://api.bsky.app")
     lookback_days = pc_cfg.get("initial_lookback_days", 30)
     max_posts_per_acc = pc_cfg.get("max_posts_per_account", 100)
-    delay_seconds = pc_cfg.get("request_delay_seconds", 0.15)
+    delay_seconds = pc_cfg.get("request_delay_seconds", 0.05)
+    save_raw_json = pc_cfg.get("save_raw_json", False)
 
     default_since = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -143,12 +151,7 @@ def run_post_collector_job(config: Dict[str, Any], logger: logging.Logger) -> No
 
         accounts = get_all_accounts(conn)
         total_accounts = len(accounts)
-        logger.info(f"Targeting {total_accounts} tracked accounts for post collection.")
-
-        if total_accounts == 0:
-            logger.warning("No tracked accounts in DB. Run the seeder first.")
-            record_heartbeat(conn, "post_collector", "IDLE", {"message": "No tracked accounts"})
-            return
+        logger.info(f"Collecting authored posts for {total_accounts} accounts.")
 
         client = ResilientAppViewClient(
             base_url=api_base,
@@ -162,28 +165,30 @@ def run_post_collector_job(config: Dict[str, Any], logger: logging.Logger) -> No
         for idx, acc in enumerate(accounts, start=1):
             did = acc["did"]
             handle = acc.get("handle") or did
-            since_watermark = acc.get("last_post_pulled_at") or default_since
+            watermark = acc.get("last_post_watermark")
 
             try:
                 posts, raw_items, latest_ts = fetch_author_posts(
                     client=client,
                     account_did=did,
-                    since_iso=since_watermark,
+                    since_iso=default_since,
                     max_posts=max_posts_per_acc,
+                    watermark_ts=watermark,
                     logger=logger,
                 )
 
                 if posts:
                     inserted = insert_posts_batch(conn, posts)
                     total_posts_saved += inserted
-                    logger.info(
-                        f"[{idx}/{total_accounts}] @{handle}: saved {inserted} new posts/reposts."
-                    )
+                    if idx % 100 == 0 or idx == total_accounts:
+                        logger.info(
+                            f"Progress: [{idx}/{total_accounts} accounts] — {total_posts_saved} posts saved so far..."
+                        )
 
                 if latest_ts:
                     update_account_post_watermark(conn, did, latest_ts)
 
-                if raw_items:
+                if raw_items and save_raw_json:
                     sanitized_did = did.replace(":", "_")
                     archive_raw_json(
                         raw_items,
@@ -218,10 +223,11 @@ def run_post_collector_job(config: Dict[str, Any], logger: logging.Logger) -> No
         )
     finally:
         conn.close()
+        client.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tracked account post collector service.")
+    parser = argparse.ArgumentParser(description="Authored post collector for tracked panel accounts.")
     parser.add_argument("--once", action="store_true", help="Run once and exit immediately.")
     args = parser.parse_args()
 
@@ -232,24 +238,24 @@ def main():
         run_post_collector_job(config, logger)
         return
 
-    # Scheduled daemon mode
     pc_cfg = config.get("post_collector", {})
     sched_time = pc_cfg.get("schedule_time_utc", "04:00")
+    day_of_week = pc_cfg.get("schedule_day_of_week", "sun")
     hour, minute = [int(x) for x in sched_time.split(":")]
 
     scheduler = BlockingScheduler(timezone=timezone.utc)
     scheduler.add_job(
         run_post_collector_job,
-        trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone.utc),
+        trigger=CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute, timezone=timezone.utc),
         args=[config, logger],
-        id="daily_post_collector_job",
-        name="Daily Post Collector",
+        id="weekly_post_collector_job",
+        name="Weekly Post Collector",
         max_instances=1,
     )
 
-    logger.info(f"Post collector scheduler started. Scheduled daily at {sched_time} UTC.")
+    logger.info(f"Post collector scheduler started. Scheduled weekly on {day_of_week.upper()} at {sched_time} UTC.")
     conn = get_db_connection(config.get("storage", {}).get("db_path", "/data/bluesky_panel.sqlite"))
-    record_heartbeat(conn, "post_collector", "IDLE", {"schedule": f"{sched_time} UTC"})
+    record_heartbeat(conn, "post_collector", "IDLE", {"schedule": f"Weekly {day_of_week.upper()} {sched_time} UTC"})
     conn.close()
 
     try:
